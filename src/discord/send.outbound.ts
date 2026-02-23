@@ -1,18 +1,19 @@
+import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
-import { ChannelType, Routes } from "discord-api-types/v10";
+import type { RetryConfig } from "../infra/retry.js";
+import type { PollInput } from "../polls.js";
+import type { DiscordSendResult } from "./send.types.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import type { RetryConfig } from "../infra/retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { maxBytesForKind } from "../media/constants.js";
 import { extensionForMime } from "../media/mime.js";
-import type { PollInput } from "../polls.js";
 import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
@@ -34,7 +35,6 @@ import {
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.shared.js";
-import type { DiscordSendResult } from "./send.types.js";
 import {
   ensureOggOpus,
   getVoiceMessageMetadata,
@@ -453,12 +453,16 @@ type VoiceMessageOpts = {
   replyTo?: string;
   retry?: RetryConfig;
   silent?: boolean;
+  mediaLocalRoots?: readonly string[];
 };
 
-async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePath: string }> {
+async function materializeVoiceMessageInput(
+  mediaUrl: string,
+  localRoots?: readonly string[],
+): Promise<{ filePath: string }> {
   // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
   // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
-  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
+  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"), { localRoots });
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
   const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
   const ext = extFromName || extFromMime || ".bin";
@@ -483,7 +487,10 @@ export async function sendVoiceMessageDiscord(
   audioPath: string,
   opts: VoiceMessageOpts = {},
 ): Promise<DiscordSendResult> {
-  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath);
+  const { filePath: localInputPath } = await materializeVoiceMessageInput(
+    audioPath,
+    opts.mediaLocalRoots,
+  );
   let oggPath: string | null = null;
   let oggCleanup = false;
   let token: string | undefined;
